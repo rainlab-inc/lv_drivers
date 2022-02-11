@@ -7,6 +7,7 @@
  *      INCLUDES
  *********************/
 #include "sdl_gles.h"
+#if USE_SDL_GLES
 
 #if LV_USE_GPU_SDL_GLES == 0
 # error "LV_USE_GPU_GLES must be enabled"
@@ -285,3 +286,5 @@ static int tick_thread(void *data)
 
     return 0;
 }
+
+#endif /*USE_SDL_GLES*/

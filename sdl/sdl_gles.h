@@ -22,7 +22,7 @@ extern "C" {
 #endif
 #endif
 
-#if LV_USE_GPU_SDL_GLES
+#if USE_SDL_GLES
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
@@ -52,7 +52,7 @@ void sdl_gles_disp_drv_init(lv_disp_draw_buf_t *draw_buf);
  *      MACROS
  **********************/
 
-#endif /* LV_USE_GPU_GLES */
+#endif /* USE_SDL_GLES */
 
 #ifdef __cplusplus
 } /*extern "C"*/

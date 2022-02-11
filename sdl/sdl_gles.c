@@ -46,6 +46,7 @@ typedef struct {
  *  STATIC PROTOTYPES
  **********************/
 static void window_create(monitor_t * m);
+static void window_update(monitor_t * m);
 static void monitor_sdl_gles_clean_up(void);
 static void sdl_gles_event_handler(lv_timer_t * t);
 static void mouse_handler(SDL_Event *event);
@@ -148,38 +149,23 @@ static void sdl_gles_event_handler(lv_timer_t * t)
     while (!quit) {
         while (SDL_PollEvent(&event)) {
             mouse_handler(&event);
+
+            if (event.type == SDL_WINDOWEVENT) {
+                switch ((&event)->window.event) {
+                    case SDL_WINDOWEVENT_EXPOSED:
+                        window_update(&monitor);
+                        break;
+                        /* TODO: handle dual display */
+                    default:
+                        break;
+                }
+            }
             if (event.type == SDL_QUIT) {
                 quit = true;
             }
         }
 
         /* RENDER */
-        glBindFramebuffer(GL_FRAMEBUFFER, monitor.framebuffer);
-        glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-
-        glUseProgram(monitor.program);
-        glVertexAttribPointer(monitor.position_location, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), vertices);
-        glEnableVertexAttribArray(monitor.position_location);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-        glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        glUseProgram(monitor.framebuffer_program);
-        glBindTexture(GL_TEXTURE_2D, monitor.framebuffer_texture);
-
-        glVertexAttribPointer(monitor.framebuffer_position_location, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), framebuffer_vertices);
-        glEnableVertexAttribArray(monitor.framebuffer_position_location);
-        glVertexAttribPointer(monitor.framebuffer_uv_location, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), &framebuffer_vertices[2]);
-        glEnableVertexAttribArray(monitor.framebuffer_uv_location);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-
-
-        SDL_GL_SwapWindow(monitor.window);
     }
 
     if (quit) {
@@ -231,6 +217,37 @@ static void window_create(monitor_t *m)
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m->framebuffer_texture, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+
+}
+
+static void window_update(monitor_t *m)
+{
+    glBindFramebuffer(GL_FRAMEBUFFER, m->framebuffer);
+    glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+
+    glUseProgram(m->program);
+    glVertexAttribPointer(m->position_location, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), vertices);
+    glEnableVertexAttribArray(m->position_location);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glUseProgram(m->framebuffer_program);
+    glBindTexture(GL_TEXTURE_2D, m->framebuffer_texture);
+
+    glVertexAttribPointer(m->framebuffer_position_location, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), framebuffer_vertices);
+    glEnableVertexAttribArray(m->framebuffer_position_location);
+    glVertexAttribPointer(m->framebuffer_uv_location, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), &framebuffer_vertices[2]);
+    glEnableVertexAttribArray(m->framebuffer_uv_location);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+
+    SDL_GL_SwapWindow(m->window);
 
 }
 

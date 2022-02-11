@@ -38,7 +38,7 @@ typedef struct {
     GLuint framebuffer_texture;
     GLint framebuffer_position_location;
     GLint framebuffer_uv_location;
-
+    volatile bool sdl_refr_qry;
 }monitor_t;
 
 
@@ -138,6 +138,29 @@ void sdl_gles_init(void)
     lv_timer_create(sdl_gles_event_handler, 10, NULL);
 }
 
+void sdl_gles_disp_draw_buf_init(lv_disp_draw_buf_t *draw_buf)
+{
+    lv_disp_draw_buf_init(draw_buf, &monitor.framebuffer, NULL, SDL_HOR_RES * SDL_VER_RES);
+}
+
+void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
+{
+    lv_disp_drv_init(driver);
+    driver->draw_buf = draw_buf;
+    driver->flush_cb = sdl_gles_display_flush;
+    driver->hor_res = SDL_HOR_RES;
+    driver->ver_res = SDL_VER_RES;
+}
+
+void sdl_gles_display_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)
+{
+    fprintf(stderr, "TEST\n");
+
+    monitor.sdl_refr_qry = true;
+
+    lv_disp_flush_ready(disp_drv);
+}
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/
@@ -217,11 +240,13 @@ static void window_create(monitor_t *m)
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m->framebuffer_texture, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    m->sdl_refr_qry = true;
 
 }
 
 static void window_update(monitor_t *m)
 {
+#if 0
     glBindFramebuffer(GL_FRAMEBUFFER, m->framebuffer);
     glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -233,7 +258,7 @@ static void window_update(monitor_t *m)
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
+#endif
     glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 

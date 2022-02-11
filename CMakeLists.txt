@@ -9,7 +9,8 @@ add_library(lvgl::drivers ALIAS lv_drivers)
 
 target_include_directories(lv_drivers SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(lv_drivers PUBLIC lvgl)
+add_subdirectory(glad)
+target_link_libraries(lv_drivers PUBLIC lvgl PUBLIC glad)
 
 if("${LIB_INSTALL_DIR}" STREQUAL "")
   set(LIB_INSTALL_DIR "lib")

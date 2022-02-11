@@ -94,7 +94,12 @@
 # define USE_SDL_GPU 0
 #endif
 
-#if USE_SDL || USE_SDL_GPU
+/* Use GLES renderer driver */
+#ifndef USE_SDL_GLES
+#define USE_SDL_GLES 1
+#endif
+
+#if USE_SDL || USE_SDL_GPU || USE_SDL_GLES
 #  define SDL_HOR_RES     480
 #  define SDL_VER_RES     320
 

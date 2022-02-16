@@ -140,7 +140,8 @@ void sdl_gles_init(void)
 
 void sdl_gles_disp_draw_buf_init(lv_disp_draw_buf_t *draw_buf)
 {
-    lv_disp_draw_buf_init(draw_buf, &monitor.framebuffer, NULL, SDL_HOR_RES * SDL_VER_RES);
+    //lv_disp_draw_buf_init(draw_buf, &monitor.framebuffer, NULL, SDL_HOR_RES * SDL_VER_RES);
+    lv_disp_draw_buf_init(draw_buf, NULL, NULL, SDL_HOR_RES * SDL_VER_RES);
 }
 
 void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
@@ -150,6 +151,7 @@ void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
     driver->flush_cb = sdl_gles_display_flush;
     driver->hor_res = SDL_HOR_RES;
     driver->ver_res = SDL_VER_RES;
+    driver->user_data = &monitor.framebuffer;
 }
 
 void sdl_gles_display_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)

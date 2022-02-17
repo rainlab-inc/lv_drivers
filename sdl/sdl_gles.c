@@ -49,6 +49,7 @@ static void window_create(monitor_t * m);
 static void window_update(monitor_t * m);
 static void monitor_sdl_gles_clean_up(void);
 static void sdl_gles_event_handler(lv_timer_t * t);
+static void monitor_sdl_gles_refr(lv_timer_t * t);
 static void mouse_handler(SDL_Event *event);
 static int tick_thread(void *data);
 
@@ -156,10 +157,26 @@ void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
 
 void sdl_gles_display_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)
 {
-    fprintf(stderr, "TEST\n");
+    lv_coord_t hres = disp_drv->hor_res;
+    lv_coord_t vres = disp_drv->ver_res;
+
+ //   printf("x1:%d,y1:%d,x2:%d,y2:%d\n", area->x1, area->y1, area->x2, area->y2);
+
+    /*Return if the area is out the screen*/
+    if(area->x2 < 0 || area->y2 < 0 || area->x1 > hres - 1 || area->y1 > vres - 1) {
+        lv_disp_flush_ready(disp_drv);
+        return;
+    }
 
     monitor.sdl_refr_qry = true;
 
+    /* TYPICALLY YOU DO NOT NEED THIS
+     * If it was the last part to refresh update the texture of the window.*/
+    if(lv_disp_flush_is_last(disp_drv)) {
+        monitor_sdl_gles_refr(NULL);
+    }
+
+    /*IMPORTANT! It must be called to tell the system the flush is ready*/
     lv_disp_flush_ready(disp_drv);
 }
 
@@ -171,7 +188,6 @@ static void sdl_gles_event_handler(lv_timer_t * t)
     (void)t;
 
     SDL_Event event;
-    while (!quit) {
         while (SDL_PollEvent(&event)) {
             mouse_handler(&event);
 
@@ -190,8 +206,6 @@ static void sdl_gles_event_handler(lv_timer_t * t)
             }
         }
 
-        /* RENDER */
-    }
 
     if (quit) {
         monitor_sdl_gles_clean_up();
@@ -244,6 +258,16 @@ static void window_create(monitor_t *m)
 
     m->sdl_refr_qry = true;
 
+}
+
+static void monitor_sdl_gles_refr(lv_timer_t *t)
+{
+    (void)t;
+    /*Refresh handling*/
+    if(monitor.sdl_refr_qry != false) {
+        monitor.sdl_refr_qry = false;
+        window_update(&monitor);
+    }
 }
 
 static void window_update(monitor_t *m)

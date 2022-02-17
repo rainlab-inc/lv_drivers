@@ -180,6 +180,21 @@ void sdl_gles_display_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv
     lv_disp_flush_ready(disp_drv);
 }
 
+void sdl_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
+{
+    (void) indev_drv;
+
+    data->point.x = last_x;
+    data->point.y = last_y;
+
+    if (left_button_down) {
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+
+}
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/

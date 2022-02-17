@@ -50,6 +50,8 @@ void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
 
 void sdl_gles_display_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p);
 
+void sdl_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data);
+
 /**********************
  *      MACROS
  **********************/

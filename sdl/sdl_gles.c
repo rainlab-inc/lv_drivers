@@ -51,6 +51,7 @@ static void monitor_sdl_gles_clean_up(void);
 static void sdl_gles_event_handler(lv_timer_t * t);
 static void monitor_sdl_gles_refr(lv_timer_t * t);
 static void mouse_handler(SDL_Event *event);
+static void framebuffer_clear(monitor_t * m);
 static int tick_thread(void *data);
 
 /**********************
@@ -152,6 +153,7 @@ void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
     driver->flush_cb = sdl_gles_display_flush;
     driver->hor_res = SDL_HOR_RES;
     driver->ver_res = SDL_VER_RES;
+    driver->full_refresh = 1;
     driver->user_data = &monitor.framebuffer;
 }
 
@@ -178,6 +180,7 @@ void sdl_gles_display_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv
 
     /*IMPORTANT! It must be called to tell the system the flush is ready*/
     lv_disp_flush_ready(disp_drv);
+    framebuffer_clear(&monitor);
 }
 
 void sdl_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
@@ -351,6 +354,14 @@ static void mouse_handler(SDL_Event *event)
             last_y = LV_VER_RES * event->tfinger.y / SDL_ZOOM;
             break;
     }
+}
+
+static void framebuffer_clear(monitor_t * m)
+{
+    glBindFramebuffer(GL_FRAMEBUFFER, m->framebuffer);
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 static void monitor_sdl_gles_clean_up(void)

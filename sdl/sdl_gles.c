@@ -135,8 +135,7 @@ void sdl_gles_init(void)
 void sdl_gles_disp_draw_buf_init(lv_disp_draw_buf_t *draw_buf)
 {
     static lv_color_t buf1_1[SDL_HOR_RES * SDL_VER_RES];
-    static lv_color_t buf1_2[SDL_HOR_RES * SDL_VER_RES];
-    lv_disp_draw_buf_init(draw_buf, buf1_1, buf1_2, SDL_HOR_RES * SDL_VER_RES);
+    lv_disp_draw_buf_init(draw_buf, buf1_1, NULL, SDL_HOR_RES * SDL_VER_RES);
 }
 
 void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
@@ -146,8 +145,9 @@ void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
     driver->flush_cb = sdl_gles_display_flush;
     driver->hor_res = SDL_HOR_RES;
     driver->ver_res = SDL_VER_RES;
-    //driver->full_refresh = 1;
-    driver->user_data = &monitor.texture;
+    driver->direct_mode = 1;
+    driver->full_refresh = 1;
+    //driver->user_data = &monitor.texture;
 }
 
 // From the article https://lupyuen.github.io/pinetime-rust-mynewt/articles/wayland

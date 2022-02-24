@@ -52,6 +52,8 @@ void sdl_gles_display_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv
 
 void sdl_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data);
 
+void sdl_gles_keyboard_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data);
+
 /**********************
  *      MACROS
  **********************/

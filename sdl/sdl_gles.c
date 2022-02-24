@@ -8,10 +8,13 @@
  *********************/
 #include "sdl_gles.h"
 #if USE_SDL_GLES
-
+/*
+ * LATER HANDLE THIS
 #if LV_USE_GPU_SDL_GLES == 0
 # error "LV_USE_GPU_GLES must be enabled"
 #endif
+ *
+ */
 
 #include <glad/glad.h>
 #include SDL_INCLUDE_PATH
@@ -22,7 +25,10 @@
 /*********************
  *      DEFINES
  *********************/
-
+#ifndef KEYBOARD_BUFFER_SIZE
+#define KEYBOARD_BUFFER_SIZE SDL_TEXTINPUTEVENT_TEXT_SIZE
+#endif
+#define BYTES_PER_PIXEL 3
 /**********************
  *      TYPEDEFS
  **********************/
@@ -32,12 +38,10 @@ typedef struct {
 
     GLuint program;
     GLint position_location;
+    GLint uv_location;
 
-    GLuint framebuffer_program;
-    GLuint framebuffer;
-    GLuint framebuffer_texture;
-    GLint framebuffer_position_location;
-    GLint framebuffer_uv_location;
+    GLuint texture;
+    GLubyte *texture_pixels;
     volatile bool sdl_refr_qry;
 }monitor_t;
 
@@ -51,8 +55,12 @@ static void monitor_sdl_gles_clean_up(void);
 static void sdl_gles_event_handler(lv_timer_t * t);
 static void monitor_sdl_gles_refr(lv_timer_t * t);
 static void mouse_handler(SDL_Event *event);
-static void framebuffer_clear(monitor_t * m);
+static void keyboard_handler(SDL_Event * event);
+static uint32_t keycode_to_ctrl_key(SDL_Keycode sdl_key);
 static int tick_thread(void *data);
+
+// From the article https://lupyuen.github.io/pinetime-rust-mynewt/articles/wayland
+static void put_px(uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 
 /**********************
  *  STATIC VARIABLES
@@ -64,21 +72,10 @@ static bool left_button_down = false;
 static int16_t last_x = 0;
 static int16_t last_y = 0;
 
-static char triangle_vertex_shader_str[] =
-    "attribute vec3 a_position;   \n"
-    "void main()                  \n"
-    "{                            \n"
-    "   gl_Position = vec4(a_position,1.0); \n"
-    "}                            \n";
+static char buf[KEYBOARD_BUFFER_SIZE];
 
-static char triangle_fragment_shader_str[] =
-    "precision mediump float;                            \n"
-    "void main()                                         \n"
-    "{                                                   \n"
-    "  gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);          \n"
-    "}                                                   \n";
 
-static char framebuffer_vertex_shader_str[] =
+static char vertex_shader_str[] =
     "attribute vec2 a_position;   \n"
     "attribute vec2 a_texcoord;   \n"
     "varying vec2 v_texcoord;     \n"
@@ -88,7 +85,7 @@ static char framebuffer_vertex_shader_str[] =
     "   v_texcoord = a_texcoord;  \n"
     "}                            \n";
 
-static char framebuffer_fragment_shader_str[] =
+static char fragment_shader_str[] =
     "precision mediump float;                            \n"
     "varying vec2 v_texcoord;                            \n"
     "uniform sampler2D s_texture;                        \n"
@@ -98,20 +95,15 @@ static char framebuffer_fragment_shader_str[] =
     "}                                                   \n";
 
 
+
 static GLfloat vertices[] = {
-    0.0f, 0.0f, 0.0f, // left
-    1.0f, 0.0f, 0.0f, // right
-    1.0f, 1.0f, 0.0f  // top
-};
+    -1.0f,  1.0f,  0.0f, 0.0f,
+    -1.0f, -1.0f,  0.0f, 1.0f,
+    1.0f, -1.0f,  1.0f, 1.0f,
 
-static GLfloat framebuffer_vertices[] = {
-    -1.0f,  1.0f,  0.0f, 1.0f,
-    -1.0f, -1.0f,  0.0f, 0.0f,
-    1.0f, -1.0f,  1.0f, 0.0f,
-
-    -1.0f,  1.0f,  0.0f, 1.0f,
-    1.0f, -1.0f,  1.0f, 0.0f,
-    1.0f,  1.0f,  1.0f, 1.0f
+    -1.0f,  1.0f,  0.0f, 0.0f,
+    1.0f, -1.0f,  1.0f, 1.0f,
+    1.0f,  1.0f,  1.0f, 0.0f
 };
 
 /**********************
@@ -142,8 +134,9 @@ void sdl_gles_init(void)
 
 void sdl_gles_disp_draw_buf_init(lv_disp_draw_buf_t *draw_buf)
 {
-    //lv_disp_draw_buf_init(draw_buf, &monitor.framebuffer, NULL, SDL_HOR_RES * SDL_VER_RES);
-    lv_disp_draw_buf_init(draw_buf, NULL, NULL, SDL_HOR_RES * SDL_VER_RES);
+    static lv_color_t buf1_1[SDL_HOR_RES * SDL_VER_RES];
+    static lv_color_t buf1_2[SDL_HOR_RES * SDL_VER_RES];
+    lv_disp_draw_buf_init(draw_buf, buf1_1, buf1_2, SDL_HOR_RES * SDL_VER_RES);
 }
 
 void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
@@ -153,34 +146,32 @@ void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
     driver->flush_cb = sdl_gles_display_flush;
     driver->hor_res = SDL_HOR_RES;
     driver->ver_res = SDL_VER_RES;
-    driver->full_refresh = 1;
-    driver->user_data = &monitor.framebuffer;
+    //driver->full_refresh = 1;
+    driver->user_data = &monitor.texture;
 }
 
-void sdl_gles_display_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)
+// From the article https://lupyuen.github.io/pinetime-rust-mynewt/articles/wayland
+void sdl_gles_display_flush(lv_disp_drv_t * disp_drv,
+                            const lv_area_t * area, lv_color_t * color_p)
 {
-    lv_coord_t hres = disp_drv->hor_res;
-    lv_coord_t vres = disp_drv->ver_res;
-
- //   printf("x1:%d,y1:%d,x2:%d,y2:%d\n", area->x1, area->y1, area->x2, area->y2);
-
-    /*Return if the area is out the screen*/
-    if(area->x2 < 0 || area->y2 < 0 || area->x1 > hres - 1 || area->y1 > vres - 1) {
-        lv_disp_flush_ready(disp_drv);
-        return;
+    int32_t x;
+    int32_t y;
+    for (y = area->y1; y <= area->y2; y++) {
+        for (x = area->x1; x <= area->x2; x++) {
+            /* Put a pixel to the display */
+            put_px(x, y,
+                   color_p->ch.red,
+                   color_p->ch.green,
+                   color_p->ch.blue,
+                   0xff);
+            color_p++;
+        }
     }
-
+    glBindTexture(GL_TEXTURE_2D, monitor.texture);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SDL_HOR_RES, SDL_VER_RES, GL_RGB, GL_UNSIGNED_BYTE, monitor.texture_pixels);
     monitor.sdl_refr_qry = true;
-
-    /* TYPICALLY YOU DO NOT NEED THIS
-     * If it was the last part to refresh update the texture of the window.*/
-    if(lv_disp_flush_is_last(disp_drv)) {
-        monitor_sdl_gles_refr(NULL);
-    }
-
-    /*IMPORTANT! It must be called to tell the system the flush is ready*/
+    monitor_sdl_gles_refr(NULL);
     lv_disp_flush_ready(disp_drv);
-    framebuffer_clear(&monitor);
 }
 
 void sdl_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
@@ -198,6 +189,29 @@ void sdl_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
 
 }
 
+void sdl_gles_keyboard_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
+{
+    (void) indev_drv;      /*Unused*/
+
+    static bool dummy_read = false;
+    const size_t len = strlen(buf);
+
+    /*Send a release manually*/
+    if (dummy_read) {
+        dummy_read = false;
+        data->state = LV_INDEV_STATE_RELEASED;
+        data->continue_reading = len > 0;
+    }
+        /*Send the pressed character*/
+    else if (len > 0) {
+        dummy_read = true;
+        data->state = LV_INDEV_STATE_PRESSED;
+        data->key = buf[0];
+        memmove(buf, buf + 1, len);
+        data->continue_reading = true;
+    }
+}
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/
@@ -208,9 +222,13 @@ static void sdl_gles_event_handler(lv_timer_t * t)
     SDL_Event event;
         while (SDL_PollEvent(&event)) {
             mouse_handler(&event);
+            keyboard_handler(&event);
 
             if (event.type == SDL_WINDOWEVENT) {
                 switch ((&event)->window.event) {
+#if SDL_VERSION_ATLEAST(2, 0, 5)
+                    case SDL_WINDOWEVENT_TAKE_FOCUS:
+#endif
                     case SDL_WINDOWEVENT_EXPOSED:
                         window_update(&monitor);
                         break;
@@ -249,32 +267,25 @@ static void window_create(monitor_t *m)
     printf( "GL renderer : %s\n", glGetString(GL_RENDERER));
     fflush(stdout);
 
-    m->program = gl_shader_program_create(triangle_vertex_shader_str, triangle_fragment_shader_str);
-
+    m->program = gl_shader_program_create(vertex_shader_str, fragment_shader_str);
     glUseProgram(m->program);
     m->position_location = glGetAttribLocation(m->program, "a_position");
+    m->uv_location = glGetAttribLocation(m->program, "a_texcoord");
 
-
-
-    m->framebuffer_program = gl_shader_program_create(framebuffer_vertex_shader_str, framebuffer_fragment_shader_str);
-
-    glUseProgram(m->framebuffer_program);
-    m->framebuffer_position_location = glGetAttribLocation(m->framebuffer_program, "a_position");
-    m->framebuffer_uv_location = glGetAttribLocation(m->framebuffer_program, "a_texcoord");
-
-
-    glGenFramebuffers(1, &m->framebuffer);
-    glBindFramebuffer(GL_FRAMEBUFFER, m->framebuffer);
-
-    glGenTextures(1, &m->framebuffer_texture);
-    glBindTexture(GL_TEXTURE_2D, m->framebuffer_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SDL_HOR_RES, SDL_VER_RES, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m->framebuffer_texture, 0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    m->texture_pixels = malloc(SDL_HOR_RES * SDL_VER_RES * BYTES_PER_PIXEL * sizeof(GLubyte));
+    glGenTextures(1, &m->texture);
+    glBindTexture(GL_TEXTURE_2D, m->texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SDL_HOR_RES, SDL_VER_RES, 0, GL_RGB, GL_UNSIGNED_BYTE, m->texture_pixels);
+    glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+    glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+    glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+    glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+    glBindTexture(GL_TEXTURE_2D, 0);
 
     m->sdl_refr_qry = true;
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 }
 
@@ -304,15 +315,15 @@ static void window_update(monitor_t *m)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 #endif
     glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glUseProgram(m->framebuffer_program);
-    glBindTexture(GL_TEXTURE_2D, m->framebuffer_texture);
+    glUseProgram(m->program);
+    glBindTexture(GL_TEXTURE_2D, m->texture);
 
-    glVertexAttribPointer(m->framebuffer_position_location, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), framebuffer_vertices);
-    glEnableVertexAttribArray(m->framebuffer_position_location);
-    glVertexAttribPointer(m->framebuffer_uv_location, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), &framebuffer_vertices[2]);
-    glEnableVertexAttribArray(m->framebuffer_uv_location);
+    glVertexAttribPointer(m->position_location, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), vertices);
+    glEnableVertexAttribArray(m->position_location);
+    glVertexAttribPointer(m->uv_location, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), &vertices[2]);
+    glEnableVertexAttribArray(m->uv_location);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
 
@@ -356,13 +367,80 @@ static void mouse_handler(SDL_Event *event)
     }
 }
 
-static void framebuffer_clear(monitor_t * m)
+static void keyboard_handler(SDL_Event * event)
 {
-    glBindFramebuffer(GL_FRAMEBUFFER, m->framebuffer);
-    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    /* We only care about SDL_KEYDOWN and SDL_TEXTINPUT events */
+    switch(event->type) {
+        case SDL_KEYDOWN:                       /*Button press*/
+        {
+            const uint32_t ctrl_key = keycode_to_ctrl_key(event->key.keysym.sym);
+            if (ctrl_key == '\0')
+                return;
+            const size_t len = strlen(buf);
+            if (len < KEYBOARD_BUFFER_SIZE - 1) {
+                buf[len] = ctrl_key;
+                buf[len + 1] = '\0';
+            }
+            break;
+        }
+        case SDL_TEXTINPUT:                     /*Text input*/
+        {
+            const size_t len = strlen(buf) + strlen(event->text.text);
+            if (len < KEYBOARD_BUFFER_SIZE - 1)
+                strcat(buf, event->text.text);
+        }
+            break;
+        default:
+            break;
+
+    }
 }
+
+
+
+static uint32_t keycode_to_ctrl_key(SDL_Keycode sdl_key)
+{
+    /*Remap some key to LV_KEY_... to manage groups*/
+    switch(sdl_key) {
+        case SDLK_RIGHT:
+        case SDLK_KP_PLUS:
+            return LV_KEY_RIGHT;
+
+        case SDLK_LEFT:
+        case SDLK_KP_MINUS:
+            return LV_KEY_LEFT;
+
+        case SDLK_UP:
+            return LV_KEY_UP;
+
+        case SDLK_DOWN:
+            return LV_KEY_DOWN;
+
+        case SDLK_ESCAPE:
+            return LV_KEY_ESC;
+
+        case SDLK_BACKSPACE:
+            return LV_KEY_BACKSPACE;
+
+        case SDLK_DELETE:
+            return LV_KEY_DEL;
+
+        case SDLK_KP_ENTER:
+        case '\r':
+            return LV_KEY_ENTER;
+
+        case SDLK_TAB:
+        case SDLK_PAGEDOWN:
+            return LV_KEY_NEXT;
+
+        case SDLK_PAGEUP:
+            return LV_KEY_PREV;
+
+        default:
+            return '\0';
+    }
+}
+
 
 static void monitor_sdl_gles_clean_up(void)
 {
@@ -379,6 +457,18 @@ static int tick_thread(void *data)
     }
 
     return 0;
+}
+
+#include <assert.h>
+// From the article https://lupyuen.github.io/pinetime-rust-mynewt/articles/wayland
+static void put_px(uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    assert(x >= 0); assert(x < SDL_HOR_RES);
+    assert(y >= 0); assert(y < SDL_VER_RES);
+    int i = (y * SDL_HOR_RES * BYTES_PER_PIXEL) + (x * BYTES_PER_PIXEL);
+    monitor.texture_pixels[i++] = r;  //  Red
+    monitor.texture_pixels[i++] = g;  //  Green
+    monitor.texture_pixels[i++] = b;  //  Blue
 }
 
 #endif /*USE_SDL_GLES*/

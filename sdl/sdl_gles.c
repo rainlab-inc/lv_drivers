@@ -22,7 +22,9 @@
 /*********************
  *      DEFINES
  *********************/
-
+#ifndef KEYBOARD_BUFFER_SIZE
+#define KEYBOARD_BUFFER_SIZE SDL_TEXTINPUTEVENT_TEXT_SIZE
+#endif
 /**********************
  *      TYPEDEFS
  **********************/
@@ -51,7 +53,8 @@ static void monitor_sdl_gles_clean_up(void);
 static void sdl_gles_event_handler(lv_timer_t * t);
 static void monitor_sdl_gles_refr(lv_timer_t * t);
 static void mouse_handler(SDL_Event *event);
-static void framebuffer_clear(monitor_t * m);
+static void keyboard_handler(SDL_Event * event);
+static uint32_t keycode_to_ctrl_key(SDL_Keycode sdl_key);
 static int tick_thread(void *data);
 
 /**********************
@@ -63,20 +66,7 @@ static volatile bool quit = false;
 static bool left_button_down = false;
 static int16_t last_x = 0;
 static int16_t last_y = 0;
-
-static char triangle_vertex_shader_str[] =
-    "attribute vec3 a_position;   \n"
-    "void main()                  \n"
-    "{                            \n"
-    "   gl_Position = vec4(a_position,1.0); \n"
-    "}                            \n";
-
-static char triangle_fragment_shader_str[] =
-    "precision mediump float;                            \n"
-    "void main()                                         \n"
-    "{                                                   \n"
-    "  gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);          \n"
-    "}                                                   \n";
+static char buf[KEYBOARD_BUFFER_SIZE];
 
 static char framebuffer_vertex_shader_str[] =
     "attribute vec2 a_position;   \n"
@@ -105,13 +95,13 @@ static GLfloat vertices[] = {
 };
 
 static GLfloat framebuffer_vertices[] = {
-    -1.0f,  1.0f,  0.0f, 1.0f,
-    -1.0f, -1.0f,  0.0f, 0.0f,
-    1.0f, -1.0f,  1.0f, 0.0f,
+    -1.0f,  1.0f,  0.0f, 0.0f,
+    -1.0f, -1.0f,  0.0f, 1.0f,
+    1.0f, -1.0f,  1.0f, 1.0f,
 
-    -1.0f,  1.0f,  0.0f, 1.0f,
-    1.0f, -1.0f,  1.0f, 0.0f,
-    1.0f,  1.0f,  1.0f, 1.0f
+    -1.0f,  1.0f,  0.0f, 0.0f,
+    1.0f, -1.0f,  1.0f, 1.0f,
+    1.0f,  1.0f,  1.0f, 0.0f
 };
 
 /**********************
@@ -142,7 +132,6 @@ void sdl_gles_init(void)
 
 void sdl_gles_disp_draw_buf_init(lv_disp_draw_buf_t *draw_buf)
 {
-    //lv_disp_draw_buf_init(draw_buf, &monitor.framebuffer, NULL, SDL_HOR_RES * SDL_VER_RES);
     lv_disp_draw_buf_init(draw_buf, NULL, NULL, SDL_HOR_RES * SDL_VER_RES);
 }
 
@@ -154,6 +143,7 @@ void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
     driver->hor_res = SDL_HOR_RES;
     driver->ver_res = SDL_VER_RES;
     driver->full_refresh = 1;
+    driver->direct_mode = 1; /* Not sure is it required? */
     driver->user_data = &monitor.framebuffer;
 }
 
@@ -180,7 +170,7 @@ void sdl_gles_display_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv
 
     /*IMPORTANT! It must be called to tell the system the flush is ready*/
     lv_disp_flush_ready(disp_drv);
-    framebuffer_clear(&monitor);
+    //framebuffer_clear(&monitor);
 }
 
 void sdl_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
@@ -198,6 +188,29 @@ void sdl_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
 
 }
 
+void sdl_gles_keyboard_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
+{
+    (void) indev_drv;      /*Unused*/
+
+    static bool dummy_read = false;
+    const size_t len = strlen(buf);
+
+    /*Send a release manually*/
+    if (dummy_read) {
+        dummy_read = false;
+        data->state = LV_INDEV_STATE_RELEASED;
+        data->continue_reading = len > 0;
+    }
+        /*Send the pressed character*/
+    else if (len > 0) {
+        dummy_read = true;
+        data->state = LV_INDEV_STATE_PRESSED;
+        data->key = buf[0];
+        memmove(buf, buf + 1, len);
+        data->continue_reading = true;
+    }
+}
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/
@@ -208,6 +221,7 @@ static void sdl_gles_event_handler(lv_timer_t * t)
     SDL_Event event;
         while (SDL_PollEvent(&event)) {
             mouse_handler(&event);
+            keyboard_handler(&event);
 
             if (event.type == SDL_WINDOWEVENT) {
                 switch ((&event)->window.event) {
@@ -249,10 +263,6 @@ static void window_create(monitor_t *m)
     printf( "GL renderer : %s\n", glGetString(GL_RENDERER));
     fflush(stdout);
 
-    m->program = gl_shader_program_create(triangle_vertex_shader_str, triangle_fragment_shader_str);
-
-    glUseProgram(m->program);
-    m->position_location = glGetAttribLocation(m->program, "a_position");
 
 
 
@@ -268,7 +278,7 @@ static void window_create(monitor_t *m)
 
     glGenTextures(1, &m->framebuffer_texture);
     glBindTexture(GL_TEXTURE_2D, m->framebuffer_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SDL_HOR_RES, SDL_VER_RES, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SDL_HOR_RES, SDL_VER_RES, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m->framebuffer_texture, 0);
@@ -290,19 +300,6 @@ static void monitor_sdl_gles_refr(lv_timer_t *t)
 
 static void window_update(monitor_t *m)
 {
-#if 0
-    glBindFramebuffer(GL_FRAMEBUFFER, m->framebuffer);
-    glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-
-    glUseProgram(m->program);
-    glVertexAttribPointer(m->position_location, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), vertices);
-    glEnableVertexAttribArray(m->position_location);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-#endif
     glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -315,6 +312,8 @@ static void window_update(monitor_t *m)
     glEnableVertexAttribArray(m->framebuffer_uv_location);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     SDL_GL_SwapWindow(m->window);
 
@@ -355,14 +354,78 @@ static void mouse_handler(SDL_Event *event)
             break;
     }
 }
-
-static void framebuffer_clear(monitor_t * m)
+static void keyboard_handler(SDL_Event * event)
 {
-    glBindFramebuffer(GL_FRAMEBUFFER, m->framebuffer);
-    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    /* We only care about SDL_KEYDOWN and SDL_TEXTINPUT events */
+    switch(event->type) {
+    case SDL_KEYDOWN:                       /*Button press*/
+    {
+        const uint32_t ctrl_key = keycode_to_ctrl_key(event->key.keysym.sym);
+        if (ctrl_key == '\0')
+            return;
+        const size_t len = strlen(buf);
+        if (len < KEYBOARD_BUFFER_SIZE - 1) {
+            buf[len] = ctrl_key;
+            buf[len + 1] = '\0';
+        }
+        break;
+    }
+    case SDL_TEXTINPUT:                     /*Text input*/
+    {
+        const size_t len = strlen(buf) + strlen(event->text.text);
+        if (len < KEYBOARD_BUFFER_SIZE - 1)
+            strcat(buf, event->text.text);
+    }
+        break;
+    default:
+        break;
+
+    }
 }
+
+static uint32_t keycode_to_ctrl_key(SDL_Keycode sdl_key)
+{
+    /*Remap some key to LV_KEY_... to manage groups*/
+    switch(sdl_key) {
+    case SDLK_RIGHT:
+    case SDLK_KP_PLUS:
+        return LV_KEY_RIGHT;
+
+    case SDLK_LEFT:
+    case SDLK_KP_MINUS:
+        return LV_KEY_LEFT;
+
+    case SDLK_UP:
+        return LV_KEY_UP;
+
+    case SDLK_DOWN:
+        return LV_KEY_DOWN;
+
+    case SDLK_ESCAPE:
+        return LV_KEY_ESC;
+
+    case SDLK_BACKSPACE:
+        return LV_KEY_BACKSPACE;
+
+    case SDLK_DELETE:
+        return LV_KEY_DEL;
+
+    case SDLK_KP_ENTER:
+    case '\r':
+        return LV_KEY_ENTER;
+
+    case SDLK_TAB:
+    case SDLK_PAGEDOWN:
+        return LV_KEY_NEXT;
+
+    case SDLK_PAGEUP:
+        return LV_KEY_PREV;
+
+    default:
+        return '\0';
+    }
+}
+
 
 static void monitor_sdl_gles_clean_up(void)
 {

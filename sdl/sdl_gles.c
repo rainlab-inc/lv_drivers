@@ -7,20 +7,15 @@
  *      INCLUDES
  *********************/
 #include "sdl_gles.h"
+
 #if USE_SDL_GLES
-/*
- * LATER HANDLE THIS
-#if LV_USE_GPU_SDL_GLES == 0
+#if LV_USE_GPU_GLES == 0
 # error "LV_USE_GPU_GLES must be enabled"
 #endif
- *
- */
 
-#include <glad/glad.h>
+
+#include LV_GPU_GLES_GLAD_INCLUDE_PATH
 #include SDL_INCLUDE_PATH
-#include "gl.h"
-
-#include <stdbool.h>
 
 /*********************
  *      DEFINES
@@ -28,7 +23,9 @@
 #ifndef KEYBOARD_BUFFER_SIZE
 #define KEYBOARD_BUFFER_SIZE SDL_TEXTINPUTEVENT_TEXT_SIZE
 #endif
-#define BYTES_PER_PIXEL 3
+#if LV_USE_GPU_GLES_SW_MIXED
+    #define BYTES_PER_PIXEL 3
+#endif
 /**********************
  *      TYPEDEFS
  **********************/
@@ -41,7 +38,12 @@ typedef struct {
     GLint uv_location;
 
     GLuint texture;
+
+#if LV_USE_GPU_GLES_SW_MIXED
     GLubyte *texture_pixels;
+#else
+    GLuint framebuffer;
+#endif /* LV_USE_GPU_GLES_SW_MIXED */
     volatile bool sdl_refr_qry;
 }monitor_t;
 
@@ -58,9 +60,13 @@ static void mouse_handler(SDL_Event *event);
 static void keyboard_handler(SDL_Event * event);
 static uint32_t keycode_to_ctrl_key(SDL_Keycode sdl_key);
 static int tick_thread(void *data);
+static GLuint gl_shader_program_create(const char *vertex_src, const char *fragment_src);
+#if LV_USE_GPU_GLES_SW_MIXED
+static GLuint gl_texture_create(int width, int height, GLubyte *pixels);
 
 // From the article https://lupyuen.github.io/pinetime-rust-mynewt/articles/wayland
 static void put_px(uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+#endif /* LV_USE_GPU_GLES_SW_MIXED */
 
 /**********************
  *  STATIC VARIABLES
@@ -95,8 +101,8 @@ static char fragment_shader_str[] =
     "}                                                   \n";
 
 
-
 static GLfloat vertices[] = {
+#if LV_USE_GPU_GLES_SW_MIXED
     -1.0f,  1.0f,  0.0f, 0.0f,
     -1.0f, -1.0f,  0.0f, 1.0f,
     1.0f, -1.0f,  1.0f, 1.0f,
@@ -104,6 +110,15 @@ static GLfloat vertices[] = {
     -1.0f,  1.0f,  0.0f, 0.0f,
     1.0f, -1.0f,  1.0f, 1.0f,
     1.0f,  1.0f,  1.0f, 0.0f
+#else
+    -1.0f,  1.0f,  0.0f, 1.0f,
+    -1.0f, -1.0f,  0.0f, 0.0f,
+    1.0f, -1.0f,  1.0f, 0.0f,
+
+    -1.0f,  1.0f,  0.0f, 1.0f,
+    1.0f, -1.0f,  1.0f, 0.0f,
+    1.0f,  1.0f,  1.0f, 1.0f
+#endif /* LV_USE_GPU_GLES_SW_MIXED */
 };
 
 /**********************
@@ -134,8 +149,12 @@ void sdl_gles_init(void)
 
 void sdl_gles_disp_draw_buf_init(lv_disp_draw_buf_t *draw_buf)
 {
+#if LV_USE_GPU_GLES_SW_MIXED
     static lv_color_t buf1_1[SDL_HOR_RES * SDL_VER_RES];
     lv_disp_draw_buf_init(draw_buf, buf1_1, NULL, SDL_HOR_RES * SDL_VER_RES);
+#else
+    lv_disp_draw_buf_init(draw_buf, NULL, NULL, SDL_HOR_RES * SDL_VER_RES);
+#endif /* LV_USE_GPU_GLES_SW_MIXED */
 }
 
 void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
@@ -147,13 +166,17 @@ void sdl_gles_disp_drv_init(lv_disp_drv_t *driver, lv_disp_draw_buf_t *draw_buf)
     driver->ver_res = SDL_VER_RES;
     driver->direct_mode = 1;
     driver->full_refresh = 1;
-    //driver->user_data = &monitor.texture;
+#if !LV_USE_GPU_GLES_SW_MIXED
+    driver->user_data = &monitor.framebuffer;
+#endif /* !LV_USE_GPU_GLES_SW_MIXED */
 }
+
 
 // From the article https://lupyuen.github.io/pinetime-rust-mynewt/articles/wayland
 void sdl_gles_display_flush(lv_disp_drv_t * disp_drv,
                             const lv_area_t * area, lv_color_t * color_p)
 {
+#if LV_USE_GPU_GLES_SW_MIXED
     int32_t x;
     int32_t y;
     for (y = area->y1; y <= area->y2; y++) {
@@ -172,6 +195,28 @@ void sdl_gles_display_flush(lv_disp_drv_t * disp_drv,
     monitor.sdl_refr_qry = true;
     monitor_sdl_gles_refr(NULL);
     lv_disp_flush_ready(disp_drv);
+#else
+    lv_coord_t hres = disp_drv->hor_res;
+    lv_coord_t vres = disp_drv->ver_res;
+
+
+    /*Return if the area is out the screen*/
+    if(area->x2 < 0 || area->y2 < 0 || area->x1 > hres - 1 || area->y1 > vres - 1) {
+        lv_disp_flush_ready(disp_drv);
+        return;
+    }
+
+    monitor.sdl_refr_qry = true;
+
+    /* TYPICALLY YOU DO NOT NEED THIS
+     * If it was the last part to refresh update the texture of the window.*/
+    if(lv_disp_flush_is_last(disp_drv)) {
+        monitor_sdl_gles_refr(NULL);
+    }
+
+    /*IMPORTANT! It must be called to tell the system the flush is ready*/
+    lv_disp_flush_ready(disp_drv);
+#endif /* LV_USE_GPU_GLES_SW_MIXED */
 }
 
 void sdl_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
@@ -268,20 +313,30 @@ static void window_create(monitor_t *m)
     fflush(stdout);
 
     m->program = gl_shader_program_create(vertex_shader_str, fragment_shader_str);
+
     glUseProgram(m->program);
     m->position_location = glGetAttribLocation(m->program, "a_position");
     m->uv_location = glGetAttribLocation(m->program, "a_texcoord");
 
-    m->texture_pixels = malloc(SDL_HOR_RES * SDL_VER_RES * BYTES_PER_PIXEL * sizeof(GLubyte));
     glGenTextures(1, &m->texture);
     glBindTexture(GL_TEXTURE_2D, m->texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SDL_HOR_RES, SDL_VER_RES, 0, GL_RGB, GL_UNSIGNED_BYTE, m->texture_pixels);
     glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
     glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
     glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
     glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-    glBindTexture(GL_TEXTURE_2D, 0);
 
+#if LV_USE_GPU_GLES_SW_MIXED
+    m->texture_pixels = malloc(SDL_HOR_RES * SDL_VER_RES * BYTES_PER_PIXEL * sizeof(GLubyte));
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SDL_HOR_RES, SDL_VER_RES, 0, GL_RGB, GL_UNSIGNED_BYTE, m->texture_pixels);
+#else
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SDL_HOR_RES, SDL_VER_RES, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &m->framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, m->framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m->texture, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+#endif /* LV_USE_GPU_GLES_SW_MIXED */
+
+    glBindTexture(GL_TEXTURE_2D, 0);
     m->sdl_refr_qry = true;
 
     glEnable(GL_BLEND);
@@ -301,21 +356,10 @@ static void monitor_sdl_gles_refr(lv_timer_t *t)
 
 static void window_update(monitor_t *m)
 {
-#if 0
-    glBindFramebuffer(GL_FRAMEBUFFER, m->framebuffer);
-    glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+
+    glClearColor(1.0f, 0.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-
-    glUseProgram(m->program);
-    glVertexAttribPointer(m->position_location, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), vertices);
-    glEnableVertexAttribArray(m->position_location);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-#endif
-    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glUseProgram(m->program);
     glBindTexture(GL_TEXTURE_2D, m->texture);
@@ -459,6 +503,7 @@ static int tick_thread(void *data)
     return 0;
 }
 
+#if LV_USE_GPU_GLES_SW_MIXED
 #include <assert.h>
 // From the article https://lupyuen.github.io/pinetime-rust-mynewt/articles/wayland
 static void put_px(uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
@@ -470,5 +515,81 @@ static void put_px(uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b, uint
     monitor.texture_pixels[i++] = g;  //  Green
     monitor.texture_pixels[i++] = b;  //  Blue
 }
+#endif /* LV_USE_GPU_GLES_SW_MIXED */
+
+static GLuint shader_create(GLenum type, const char *src)
+{
+    GLint success = 0;
+
+    GLuint shader = glCreateShader(type);
+
+    glShaderSource(shader, 1, &src, NULL);
+    glCompileShader(shader);
+
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+
+    if(!success)
+    {
+        GLint info_log_len = 0;
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &info_log_len);
+
+        char *info_log = malloc(info_log_len+1);
+        info_log[info_log_len] = '\0';
+
+        glGetShaderInfoLog(shader, info_log_len, NULL, info_log);
+        fprintf(stderr, "Failed to compile shader : %s", info_log);
+        free(info_log);
+    }
+
+    return shader;
+}
+
+
+static GLuint gl_shader_program_create(const char *vertex_src,
+                                const char *fragment_src)
+
+{
+    GLuint vertex = shader_create(GL_VERTEX_SHADER, vertex_src);
+    GLuint fragment = shader_create(GL_FRAGMENT_SHADER, fragment_src);
+    GLuint program = glCreateProgram();
+
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+
+    glLinkProgram(program);
+
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+
+    return program;
+}
+
+
+
+static GLuint gl_texture_create(int width, int height, GLubyte *pixels)
+{
+    GLuint tex_id;
+    glGenTextures ( 1, &tex_id );
+    glBindTexture ( GL_TEXTURE_2D, tex_id );
+
+    glTexImage2D (
+        GL_TEXTURE_2D,
+        0,  //  Level
+        GL_RGB,
+        width,  //  Width
+        height,  //  Height
+        0,  //  Format
+        GL_RGB,
+        GL_UNSIGNED_BYTE,
+        pixels
+    );
+    glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+    glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+    glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+    glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+    return tex_id;
+}
+
+
 
 #endif /*USE_SDL_GLES*/

@@ -357,7 +357,7 @@ static void monitor_sdl_gles_refr(lv_timer_t *t)
 static void window_update(monitor_t *m)
 {
 
-    glClearColor(1.0f, 0.0f, 1.0f, 1.0f);
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
 

@@ -14,7 +14,7 @@
 #endif
 
 
-#include LV_GPU_GLES_GLAD_INCLUDE_PATH
+#include LV_GPU_GLES_EPOXY_INCLUDE_PATH
 #include SDL_INCLUDE_PATH
 
 /*********************
@@ -305,7 +305,6 @@ static void window_create(monitor_t *m)
 
     m->context = SDL_GL_CreateContext(m->window);
 
-    gladLoadGLES2Loader((GLADloadproc) SDL_GL_GetProcAddress);
 
     printf( "GL version : %s\n", glGetString(GL_VERSION));
     printf( "GL vendor : %s\n", glGetString(GL_VENDOR));

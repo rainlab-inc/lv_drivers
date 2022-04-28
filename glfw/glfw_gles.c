@@ -138,7 +138,6 @@ void glfw_gles_init(void)
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     window_create(&monitor);
 
@@ -237,7 +236,7 @@ static void window_create(monitor_t * m)
     m->window = glfwCreateWindow(GLFW_HOR_RES,
                                  GLFW_VER_RES,
                                  "lvgl-opengl",
-                                 glfwGetPrimaryMonitor(),
+                                 NULL,
                                  NULL);
 
     glfwMakeContextCurrent(m->window);

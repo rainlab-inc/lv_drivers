@@ -53,6 +53,8 @@ void glfw_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data);
 
 void glfw_gles_touch_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data);
 
+void glfw_gles_keyboard_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data);
+
 /**********************
  *      MACROS
  **********************/

@@ -24,6 +24,9 @@
 #include <unistd.h>
 #include <assert.h>
 #include <linux/input.h>
+#include <xkbcommon/xkbcommon.h>
+#include <sys/mman.h>
+#include <fcntl.h>
 
 
 /*********************
@@ -72,6 +75,7 @@ typedef struct {
     struct wl_seat *seat;
     struct wl_pointer *pointer;
     struct wl_touch *touch;
+    struct wl_keyboard *keyboard;
 
     int mouse_x;
     int mouse_y;
@@ -80,6 +84,14 @@ typedef struct {
     int touch_x;
     int touch_y;
     bool touched;
+
+    struct xkb_context *xkb_context;
+    struct xkb_keymap *keymap;
+    struct xkb_state *state;
+
+    lv_indev_data_t keyboard_data;
+    lv_indev_state_t keyboard_state;
+
 
 
     struct timeval t1,t2;
@@ -278,6 +290,13 @@ void glfw_gles_touch_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
 }
 
 
+void glfw_gles_keyboard_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
+{
+    data->key = wp.keyboard_data.key;
+    data->state = wp.keyboard_state;
+}
+
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/
@@ -442,6 +461,215 @@ static const struct wl_touch_listener wp_touch_listener = {
     wp_touch_handle_orientation,
 };
 
+
+static lv_key_t keycode_xkb_to_lv(xkb_keysym_t xkb_key)
+{
+    lv_key_t key = 0;
+
+    if (((xkb_key >= XKB_KEY_space) && (xkb_key <= XKB_KEY_asciitilde)))
+    {
+        key = xkb_key;
+    }
+    else if (((xkb_key >= XKB_KEY_KP_0) && (xkb_key <= XKB_KEY_KP_9)))
+    {
+        key = (xkb_key & 0x003f);
+    }
+    else
+    {
+        switch (xkb_key)
+        {
+            case XKB_KEY_BackSpace:
+                key = LV_KEY_BACKSPACE;
+                break;
+            case XKB_KEY_Return:
+            case XKB_KEY_KP_Enter:
+                key = LV_KEY_ENTER;
+                break;
+            case XKB_KEY_Escape:
+                key = LV_KEY_ESC;
+                break;
+            case XKB_KEY_Delete:
+            case XKB_KEY_KP_Delete:
+                key = LV_KEY_DEL;
+                break;
+            case XKB_KEY_Home:
+            case XKB_KEY_KP_Home:
+                key = LV_KEY_HOME;
+                break;
+            case XKB_KEY_Left:
+            case XKB_KEY_KP_Left:
+                key = LV_KEY_LEFT;
+                break;
+            case XKB_KEY_Up:
+            case XKB_KEY_KP_Up:
+                key = LV_KEY_UP;
+                break;
+            case XKB_KEY_Right:
+            case XKB_KEY_KP_Right:
+                key = LV_KEY_RIGHT;
+                break;
+            case XKB_KEY_Down:
+            case XKB_KEY_KP_Down:
+                key = LV_KEY_DOWN;
+                break;
+            case XKB_KEY_Prior:
+            case XKB_KEY_KP_Prior:
+                key = LV_KEY_PREV;
+                break;
+            case XKB_KEY_Next:
+            case XKB_KEY_KP_Next:
+            case XKB_KEY_Tab:
+            case XKB_KEY_KP_Tab:
+                key = LV_KEY_NEXT;
+                break;
+            case XKB_KEY_End:
+            case XKB_KEY_KP_End:
+                key = LV_KEY_END;
+                break;
+            default:
+                break;
+        }
+    }
+
+    return key;
+}
+
+
+void wp_keyboard_handle_keymap(void *data,
+               struct wl_keyboard *wl_keyboard,
+               uint32_t format,
+               int32_t fd,
+               uint32_t size) {
+
+    struct xkb_keymap *keymap;
+    struct xkb_state *state;
+    char *map_str;
+
+    if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1)
+    {
+        close(fd);
+        return;
+    }
+
+    map_str = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map_str == MAP_FAILED)
+    {
+        close(fd);
+        return;
+    }
+
+    /* Set up XKB keymap */
+    keymap = xkb_keymap_new_from_string(wp.xkb_context, map_str,
+                                        XKB_KEYMAP_FORMAT_TEXT_V1, 0);
+    munmap(map_str, size);
+    close(fd);
+
+    if (!keymap)
+    {
+        LV_LOG_ERROR("failed to compile keymap");
+        return;
+    }
+
+    /* Set up XKB state */
+    state = xkb_state_new(keymap);
+    if (!state)
+    {
+        LV_LOG_ERROR("failed to create XKB state");
+        xkb_keymap_unref(keymap);
+        return;
+    }
+
+    xkb_keymap_unref(wp.keymap);
+    xkb_state_unref(wp.state);
+    wp.keymap = keymap;
+    wp.state = state;
+
+}
+void wp_keyboard_handle_enter(void *data,
+              struct wl_keyboard *wl_keyboard,
+              uint32_t serial,
+              struct wl_surface *surface,
+              struct wl_array *keys) {
+
+}
+void wp_keyboard_handle_leave(void *data,
+              struct wl_keyboard *wl_keyboard,
+              uint32_t serial,
+              struct wl_surface *surface) {
+
+}
+
+void wp_keyboard_handle_key(void *data,
+            struct wl_keyboard *wl_keyboard,
+            uint32_t serial,
+            uint32_t time,
+            uint32_t key,
+            uint32_t state) {
+
+    struct application *app = data;
+    const uint32_t code = (key + 8);
+    const xkb_keysym_t *syms;
+    xkb_keysym_t sym = XKB_KEY_NoSymbol;
+
+    if (!wp.state)
+    {
+        return;
+    }
+
+    if (xkb_state_key_get_syms(wp.state, code, &syms) == 1)
+    {
+        sym = syms[0];
+    }
+
+    const lv_key_t lv_key = keycode_xkb_to_lv(sym);
+    const lv_indev_state_t lv_state =
+        (state == WL_KEYBOARD_KEY_STATE_PRESSED) ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+
+    if (lv_key != 0)
+    {
+        wp.keyboard_data.key = lv_key;
+        wp.keyboard_state = lv_state;
+    }
+
+
+
+}
+
+void wp_keyboard_handle_modifiers(void *data,
+                  struct wl_keyboard *wl_keyboard,
+                  uint32_t serial,
+                  uint32_t mods_depressed,
+                  uint32_t mods_latched,
+                  uint32_t mods_locked,
+                  uint32_t group) {
+
+
+    /* If we're not using a keymap, then we don't handle PC-style modifiers */
+    if (!wp.keymap)
+    {
+        return;
+    }
+
+    xkb_state_update_mask(wp.state,
+                          mods_depressed, mods_latched, mods_locked, 0, 0, group);
+
+}
+void wp_keyboard_handle_repeat_info(void *data,
+                    struct wl_keyboard *wl_keyboard,
+                    int32_t rate,
+                    int32_t delay) {
+
+}
+
+static const struct wl_keyboard_listener wp_keyboard_listener = {
+    wp_keyboard_handle_keymap,
+    wp_keyboard_handle_enter,
+    wp_keyboard_handle_leave,
+    wp_keyboard_handle_key,
+    wp_keyboard_handle_modifiers,
+    wp_keyboard_handle_repeat_info,
+};
+
 static void
 wp_seat_handle_capabilities(void *data, struct wl_seat *seat,
                             enum wl_seat_capability caps) {
@@ -459,6 +687,14 @@ wp_seat_handle_capabilities(void *data, struct wl_seat *seat,
     } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && wp.touch) {
         wl_touch_destroy(wp.touch);
         wp.touch = NULL;
+    }
+
+    if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !wp.keyboard) {
+        wp.keyboard = wl_seat_get_keyboard(seat);
+        wl_keyboard_add_listener(wp.keyboard, &wp_keyboard_listener, NULL);
+    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && wp.keyboard) {
+        wl_keyboard_destroy(wp.keyboard);
+        wp.keyboard = NULL;
     }
 
 }
@@ -564,6 +800,7 @@ static void window_create(monitor_t * m)
     wl_display_roundtrip(wp.display);
 
 
+    wp.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 
 }
 

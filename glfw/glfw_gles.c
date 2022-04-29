@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
+#define _DEFAULT_SOURCE
+#include <unistd.h>
 
 
 /*********************
@@ -236,7 +238,7 @@ static void window_create(monitor_t * m)
     m->window = glfwCreateWindow(GLFW_HOR_RES,
                                  GLFW_VER_RES,
                                  "lvgl-opengl",
-                                 NULL,
+                                 glfwGetPrimaryMonitor(),
                                  NULL);
 
     glfwMakeContextCurrent(m->window);
@@ -362,16 +364,10 @@ static void *tick_thread(void *ptr)
 {
     (void)ptr;
 
-    double last_time = glfwGetTime();
     while(!quit) {
-        double cur_time = glfwGetTime();
-
-        if(cur_time - last_time >= 0.005) {
-            last_time = cur_time;
-            handle_events();
-            lv_tick_inc(5);
-        }
-
+        handle_events();
+        lv_tick_inc(5);
+        usleep(5 * 1000);
     }
 }
 

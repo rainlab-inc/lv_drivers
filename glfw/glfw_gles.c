@@ -15,12 +15,15 @@
 
 #include LV_GPU_GLES_EPOXY_INCLUDE_PATH
 #include GLFW_INCLUDE_PATH
-
+#define GLFW_EXPOSE_NATIVE_WAYLAND
+#include <GLFW/glfw3native.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
 #define _DEFAULT_SOURCE
 #include <unistd.h>
+#include <assert.h>
+#include <linux/input.h>
 
 
 /*********************
@@ -57,6 +60,36 @@ typedef struct {
     bool left_button_down;
 } mouse_t;
 
+typedef struct {
+    struct wl_display *display;
+    struct wl_compositor *compositor;
+    struct wl_surface *surface;
+    struct wl_shell *shell;
+    struct wl_shell_surface *shell_surface;
+    struct wl_region *region;
+    struct wl_egl_window *egl_window;
+    struct wl_callback *callback;
+    struct wl_seat *seat;
+    struct wl_pointer *pointer;
+    struct wl_touch *touch;
+
+    int mouse_x;
+    int mouse_y;
+    bool mouse_pressed;
+
+    int touch_x;
+    int touch_y;
+    bool touched;
+
+
+    struct timeval t1,t2;
+    double dt;
+}wayland_platform_t;
+
+static wayland_platform_t wp;
+
+
+
 /**********************
  *  STATIC PROTOTYPES
  **********************/
@@ -74,8 +107,6 @@ static GLuint gl_texture_create(int width, int height, GLubyte *pixels);
 static void put_px(uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 #endif /* LV_USE_GPU_GLES_SW_MIXED */
 static void framebuffer_size_callback(GLFWwindow* window, int width, int height);
-static void cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
-static void mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 /**********************
  *  STATIC VARIABLES
  **********************/
@@ -140,6 +171,7 @@ void glfw_gles_init(void)
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     window_create(&monitor);
 
@@ -220,32 +252,272 @@ void glfw_gles_mouse_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
 {
     (void) indev_drv;
 
-    data->point.x = mouse.x;
-    data->point.y = mouse.y;
+    data->point.x = wp.mouse_x;
+    data->point.y = wp.mouse_y;
 
-    if(mouse.left_button_down) {
+    if(wp.mouse_pressed) {
         data->state = LV_INDEV_STATE_PRESSED;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
     }
 }
 
+void glfw_gles_touch_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
+{
+    (void) indev_drv;
+
+    data->point.x = wp.touch_x;
+    data->point.y = wp.touch_y;
+
+    if(wp.touched) {
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+
+}
+
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/
+
+static void mouse_read_cb(lv_indev_drv_t * drv, lv_indev_data_t*data) {
+    if (wp.mouse_pressed) {
+        data->point.x = wp.mouse_x;
+        data->point.y = wp.mouse_y;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+
+}
+
+
+static void
+handle_ping(void *data, struct wl_shell_surface *shell_surface,
+            uint32_t serial) {
+    wl_shell_surface_pong(shell_surface, serial);
+    //  fprintf(stderr, "Pinged and ponged\n");
+}
+
+static void
+handle_configure(void *data, struct wl_shell_surface *shell_surface,
+                 uint32_t edges, int32_t width, int32_t height) {
+}
+
+static void
+handle_popup_done(void *data, struct wl_shell_surface *shell_surface) {
+}
+
+static const struct wl_shell_surface_listener shell_surface_listener = {
+    handle_ping,
+    handle_configure,
+    handle_popup_done
+};
+
+
+
+static void
+wp_pointer_handle_enter(void *data, struct wl_pointer *pointer,
+                        uint32_t serial, struct wl_surface *surface,
+                        wl_fixed_t sx, wl_fixed_t sy) {
+    struct wl_buffer *buffer;
+    struct wl_cursor_image *image;
+
+    // fprintf(stderr, "Pointer entered surface %p at %d %d\n", surface, sx, sy);
+
+}
+
+static void
+wp_pointer_handle_leave(void *data, struct wl_pointer *pointer,
+                        uint32_t serial, struct wl_surface *surface) {
+    //  fprintf(stderr, "Pointer left surface %p\n", surface);
+}
+
+static void
+wp_pointer_handle_motion(void *data, struct wl_pointer *pointer,
+                         uint32_t time, wl_fixed_t sx, wl_fixed_t sy) {
+    int x = wl_fixed_to_int(sx);
+    int y = wl_fixed_to_int(sy);
+    //printf("Pointer moved at %d %d\n", x, y);
+    wp.mouse_x = x;
+    wp.mouse_y = y;
+}
+
+static void
+wp_pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
+                         uint32_t serial, uint32_t time, uint32_t button,
+                         uint32_t state) {
+
+    if ( button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_PRESSED ) {
+        wp.mouse_pressed = true;
+    } else if ( button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_RELEASED ) {
+        wp.mouse_pressed = false;
+    }
+
+
+}
+
+static void
+wp_pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
+                       uint32_t time, uint32_t axis, wl_fixed_t value) {
+    //printf("Pointer handle axis\n");
+}
+
+
+static const struct wl_pointer_listener wp_pointer_listener = {
+    wp_pointer_handle_enter,
+    wp_pointer_handle_leave,
+    wp_pointer_handle_motion,
+    wp_pointer_handle_button,
+    wp_pointer_handle_axis,
+};
+
+
+void wp_touch_handle_down(void *data, struct wl_touch *wl_touch,
+                          uint32_t serial, uint32_t time,
+                          struct wl_surface *surface, int32_t id, wl_fixed_t x, wl_fixed_t y) {
+    int int_x = wl_fixed_to_int(x);
+    int int_y = wl_fixed_to_int(y);
+    wp.touch_x = int_x;
+    wp.touch_y = int_y;
+    wp.touched = true;
+}
+
+void wp_touch_handle_up(void *data,
+           struct wl_touch *wl_touch,
+           uint32_t serial,
+           uint32_t time,
+           int32_t id) {
+
+    wp.touched = false;
+
+}
+
+
+void wp_touch_handle_motion(void *data,
+               struct wl_touch *wl_touch,
+               uint32_t time,
+               int32_t id,
+               wl_fixed_t x,
+               wl_fixed_t y) {
+
+    int int_x = wl_fixed_to_int(x);
+    int int_y = wl_fixed_to_int(y);
+    wp.touch_x = int_x;
+    wp.touch_y = int_y;
+    wp.touched = true;
+
+
+}
+
+void wp_touch_handle_frame(void *data,
+              struct wl_touch *wl_touch) {
+
+}
+
+void wp_touch_handle_shape(void *data,
+              struct wl_touch *wl_touch,
+              int32_t id,
+              wl_fixed_t major,
+              wl_fixed_t minor) {
+
+}
+
+void wp_touch_handle_orientation(void *data,
+                    struct wl_touch *wl_touch,
+                    int32_t id,
+                    wl_fixed_t orientation) {
+
+}
+
+
+static const struct wl_touch_listener wp_touch_listener = {
+    wp_touch_handle_down,
+    wp_touch_handle_up,
+    wp_touch_handle_motion,
+    wp_touch_handle_frame,
+    wp_touch_handle_shape,
+    wp_touch_handle_orientation,
+};
+
+static void
+wp_seat_handle_capabilities(void *data, struct wl_seat *seat,
+                            enum wl_seat_capability caps) {
+    if ((caps & WL_SEAT_CAPABILITY_POINTER) && !wp.pointer) {
+        wp.pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(wp.pointer, &wp_pointer_listener, NULL);
+    } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && wp.pointer) {
+        wl_pointer_destroy(wp.pointer);
+        wp.pointer = NULL;
+    }
+
+    if ((caps & WL_SEAT_CAPABILITY_TOUCH) && !wp.touch) {
+        wp.touch = wl_seat_get_touch(seat);
+        wl_touch_add_listener(wp.touch, &wp_touch_listener, NULL);
+    } else if (!(caps & WL_SEAT_CAPABILITY_TOUCH) && wp.touch) {
+        wl_touch_destroy(wp.touch);
+        wp.touch = NULL;
+    }
+
+}
+
+static const struct wl_seat_listener wp_seat_listener = {
+    wp_seat_handle_capabilities,
+};
+
+
+
+
+static void wp_global_handler(void *data, struct wl_registry *registry,
+                              uint32_t name, const char *iface, uint32_t ver) {
+    if (strcmp(iface, "wl_compositor") == 0) {
+        wp.compositor = wl_registry_bind(registry,
+                                         name,
+                                         &wl_compositor_interface,
+                                         1);
+    } else if (strcmp(iface, "wl_shell") == 0) {
+        wp.shell = wl_registry_bind(registry,
+                                    name,
+                                    &wl_shell_interface,
+                                    1);
+    }
+    else if (strcmp(iface, "wl_seat") == 0) {
+        wp.seat = wl_registry_bind(registry,
+                                   name,
+                                   &wl_seat_interface,
+                                   1);
+
+        wl_seat_add_listener(wp.seat, &wp_seat_listener, NULL);
+    }
+
+}
+
+static void wp_global_remove_handler(void *data, struct wl_registry *registry,
+                                     uint32_t name) {
+    // Empty
+}
+
+
+static const struct wl_registry_listener wp_registry_listener = {
+    .global = wp_global_handler,
+    .global_remove = wp_global_remove_handler
+};
+
+
+
 static void window_create(monitor_t * m)
 {
     m->window = glfwCreateWindow(GLFW_HOR_RES,
                                  GLFW_VER_RES,
                                  "lvgl-opengl",
-                                 glfwGetPrimaryMonitor(),
+                                 NULL,
                                  NULL);
 
     glfwMakeContextCurrent(m->window);
     glfwSwapInterval(0);
     glfwSetFramebufferSizeCallback(m->window, framebuffer_size_callback);
-    glfwSetCursorPosCallback(m->window, cursor_position_callback);
-    glfwSetMouseButtonCallback(m->window, mouse_button_callback);
 
     printf( "GL version : %s\n", glGetString(GL_VERSION));
     printf( "GL vendor : %s\n", glGetString(GL_VENDOR));
@@ -282,6 +554,16 @@ static void window_create(monitor_t * m)
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    wp.display = glfwGetWaylandDisplay();
+    struct wl_registry *registry = wl_display_get_registry(wp.display);
+    assert(registry);
+    wl_registry_add_listener(registry, &wp_registry_listener, NULL);
+
+    wl_display_dispatch(wp.display);
+    wl_display_roundtrip(wp.display);
+
+
 
 }
 
@@ -395,23 +677,6 @@ static void monitor_glfw_gles_clean_up(void)
     glfwTerminate();
 }
 
-static void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
-{
-    (void) window;
-    mouse.x = (int16_t) xpos;
-    mouse.y = (int16_t) ypos;
-}
-
-static void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
-{
-    if(button == GLFW_MOUSE_BUTTON_LEFT) {
-        if(action == GLFW_PRESS) {
-            mouse.left_button_down = true;
-        } else if(action == GLFW_RELEASE) {
-            mouse.left_button_down = false;
-        }
-    }
-}
 
 
 #endif /*USE_GLFW_GLES*/

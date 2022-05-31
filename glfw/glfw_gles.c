@@ -238,7 +238,7 @@ static void window_create(monitor_t * m)
     m->window = glfwCreateWindow(GLFW_HOR_RES,
                                  GLFW_VER_RES,
                                  "lvgl-opengl",
-                                 glfwGetPrimaryMonitor(),
+                                 NULL,
                                  NULL);
 
     glfwMakeContextCurrent(m->window);
